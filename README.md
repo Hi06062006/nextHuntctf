@@ -1,13 +1,75 @@
-# nextHuntctf
+HuntMe3 – nextHuntCTF
 
-HuntMe3 
+Reverse Engineering – Dynamic Key + XOR + Permutation
 
-Bước 1: Phân tích Hàm Kiểm tra Chính (FUN_00401367)
+📌 Bước 1 — Phân tích hàm kiểm tra chính (FUN_00401367)
 
-Bước 2: Phân tích Bộ tạo Khóa Động (FUN_004012bc và FUN_004012a0)
+Hàm này thực hiện quá trình xác minh flag theo 3 công đoạn:
+
+Độ dài flag phải đúng 53 ký tự
+
+Mỗi ký tự flag được so sánh với giá trị đã giải mã từ:
+
+decoded[i] = ENCRYPTED_DATA[i] XOR DynamicKey[i]
 
 
-Code
+Sau khi giải mã, ký tự không đặt trực tiếp vào vị trí i, mà được hoán vị theo bảng PERM_INDICES.
+
+=> Muốn lấy lại flag thật cần: tạo DynamicKey → XOR → trả về đúng index.
+
+📌 Bước 2 — Phân tích bộ sinh khóa động
+🔧 Hàm FUN_004012bc(i)
+
+Sinh 1 byte khóa K[i] cho từng chỉ số i.
+
+Cơ chế:
+
+tạo 3 biến trạng thái 32-bit
+
+lặp từ j = 0 → i
+
+mỗi vòng thực hiện:
+
+cộng hằng số vào trạng thái
+
+cộng j*j vào trạng thái thứ hai
+
+gọi hàm xoay bit FUN_004012a0 lên trạng thái thứ ba
+
+🔧 Hàm FUN_004012a0
+
+Thực hiện:
+
+ROL(state, (j & 7))
+
+
+→ tức xoay trái 32 bit theo số bit nhỏ (0–7).
+
+🔧 Final key
+
+Sau vòng lặp:
+
+raw = local_c ^ local_10 ^ (local_14 >> (i & 7))
+scrambled = (raw & 0xff) ^ ((raw & 0x1f) << 3)
+final = scrambled ^ (scrambled >> 5)
+return final & 0xff
+
+
+Đây chính là byte khóa K[i].
+
+📌 Bước 3 — Tổng hợp giải mã
+
+Cho mỗi i từ 0–52:
+
+Tạo khóa K[i]
+
+Tính P = ENCRYPTED_DATA[i] XOR K[i]
+
+Đặt P vào vị trí PERM_INDICES[i] để tái tạo flag thật.
+
+🧠 Toàn bộ code khôi phục flag
+
+(Giữ nguyên đoạn code bạn đưa — mình chỉ format lại cho đẹp)
 
 import struct
 
@@ -27,104 +89,51 @@ ENCRYPTED_DATA = [
     0x38, 0xd0, 0x2e, 0x66, 0xe2, 0x26, 0x6e, 0x23, 0xaa, 0xa1, 0x5d, 0x7d, 0x36, 0xe5,
     0x6c, 0x6d, 0x35, 0xa0, 0x34, 0x0c, 0xf9, 0x84, 0xd7, 0xc9, 0x5e, 0x56, 0xc2, 0xe9,
     0x44, 0xe0, 0x77, 0x7b, 0x20, 0x78, 0x1f, 0xd9, 0x98, 0x85, 0xf5
-] # Độ dài: 53
-
-# --- 2. Mô phỏng Hàm FUN_004012a0 (Rotate Left) ---
+]
 
 def FUN_004012a0(current_state, count_raw):
-    """
-    Tái tạo logic của FUN_004012a0: Left Rotate (ROL) 32-bit.
-    """
-    # Lấy 5 bit thấp nhất (count & 0x1f)
     count = count_raw & 0x1F
-    
-    # Thực hiện xoay trái (ROL)
-    # ROL(x, n) = (x << n) | (x >> (32 - n))
-    
-    # Đảm bảo phép toán là 32-bit (unsigned)
     mask = 0xFFFFFFFF
     current_state &= mask
-    
-    # Xoay trái
-    rotated = ((current_state << count) & mask) | (current_state >> (32 - count))
-    
-    return rotated
-
-# --- 3. Mô phỏng Hàm FUN_004012bc (Dynamic Key Generation) ---
+    return ((current_state << count) & mask) | (current_state >> (32 - count))
 
 def FUN_004012bc(i):
-    """
-    Tái tạo logic của FUN_004012bc(param_1 = i) để tạo ra khóa động K[i].
-    """
-    # Khởi tạo trạng thái ban đầu (32-bit unsigned)
     mask = 0xFFFFFFFF
     local_c = 0x7a8ab05c
     local_10 = 0x362d12d2
     local_14 = 0x1574b128
-    
-    # Hằng số dịch chuyển (cũng là 32-bit signed/unsigned)
-    CONST_SHIFT = 0xE868D9FC # -394541699
-    
-    # Vòng lặp biến đổi trạng thái
+    CONST_SHIFT = 0xE868D9FC
+
     for j in range(i + 1):
-        # State 1: local_c = local_c + 0xe868d9fc;
         local_c = (local_c + CONST_SHIFT) & mask
-        
-        # State 2: local_10 = local_10 + j * j;
         local_10 = (local_10 + j * j) & mask
-        
-        # State 3: local_14 = FUN_004012a0(local_14, j & 7);
         local_14 = FUN_004012a0(local_14, j & 7)
 
-    # Tính toán Khóa Thô (Raw Key)
-    # uVar1 = local_c ^ local_10 ^ local_14 >> ((byte)param_1 & 7);
     shift_amount = i & 7
-    uVar1_raw = local_c ^ local_10 ^ (local_14 >> shift_amount)
-    uVar1_raw &= mask # Đảm bảo 32-bit
+    raw = local_c ^ local_10 ^ (local_14 >> shift_amount)
+    raw &= mask
 
-    # Tinh chỉnh và Thu gọn Khóa (Final Key Reduction)
-    
-    # uVar1 = uVar1 & 0xff ^ (uVar1 & 0x1f) << 3;
-    scramble_1 = (uVar1_raw & 0xFF) ^ ((uVar1_raw & 0x1F) << 3)
-    
-    # return uVar1 ^ uVar1 >> 5;
-    final_key_32bit = scramble_1 ^ (scramble_1 >> 5)
-    
-    # Trả về byte thấp nhất (Khóa Động K[i])
-    return final_key_32bit & 0xFF
+    scramble = (raw & 0xff) ^ ((raw & 0x1f) << 3)
+    final_key = scramble ^ (scramble >> 5)
 
-# --- 4. Quá trình Giải mã Flag Chính ---
+    return final_key & 0xFF
 
-# Khởi tạo mảng Flag (53 ký tự)
 FLAG_LENGTH = 53
 final_flag = [''] * FLAG_LENGTH
 
-# Lặp qua tất cả 53 ký tự (i = 0 đến 52)
 print("Bắt đầu Giải mã...")
 for i in range(FLAG_LENGTH):
-    
-    # 1. Lấy Khóa Động K[i]
     K = FUN_004012bc(i)
-    
-    # 2. Lấy Dữ liệu Mã hóa Đúng E[i]
     E = ENCRYPTED_DATA[i]
-    
-    # 3. Lấy Chỉ mục Hoán vị I (vị trí đích)
     I = PERM_INDICES[i]
-    
-    # 4. Giải mã Ký tự P: P = E ^ K
     P_val = E ^ K
-    P_char = chr(P_val)
-    
-    # 5. Đặt Ký tự P vào vị trí đã Hoán vị I
-    final_flag[I] = P_char
-    
-    # print(f"i={i:02d}, I={I:02d}, E={E:02X}, K={K:02X}, P={P_val:02X} ('{P_char}'): -> Flag[{I}]")
+    final_flag[I] = chr(P_val)
 
-# In ra kết quả
 final_flag_str = "".join(final_flag)
 print("\n" + "="*50)
 print(f"ĐỘ DÀI FLAG ĐÚNG: {len(final_flag_str)}")
 print("🎉 THE FINAL FLAG: 🎉")
 print(final_flag_str)
 print("="*50)
+
+🎉 Kết quả
